@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mythic Bastionland – Realm Generator</title>
+<meta name="description" content="Procedural realm generator for Mythic Bastionland RPG. Generates hex maps with terrain, holdings, myths, and landmarks.">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Palatino Linotype', Palatino, 'Book Antiqua', serif; background: #130f08; color: #ddd0a0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+header { padding: 9px 18px; background: #0a0805; border-bottom: 1px solid #5a3d0f; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+header h1 { font-size: 1rem; letter-spacing: 3px; color: #c8a030; font-weight: normal; }
+.buttons { display: flex; gap: 8px; }
+button { background: transparent; color: #c8a030; border: 1px solid #5a3d0f; padding: 5px 13px; cursor: pointer; font-family: inherit; font-size: 0.78rem; letter-spacing: 2px; transition: all 0.15s; }
+button:hover { background: #5a3d0f; color: #f0d060; }
+main { display: flex; flex: 1; overflow: hidden; }
+#map-panel { flex: 1; overflow: auto; padding: 12px; background: #0d0b06; }
+#sidebar { width: 350px; min-width: 350px; background: #0a0805; border-left: 1px solid #3a2808; display: flex; flex-direction: column; overflow: hidden; }
+#hex-detail { padding: 12px; border-bottom: 1px solid #2a1a06; overflow-y: auto; max-height: 280px; min-height: 90px; }
+#hex-detail h3 { color: #c8a030; font-size: 0.95rem; letter-spacing: 1px; margin-bottom: 6px; }
+#hex-detail .terrain-tag { font-size: 0.78rem; opacity: 0.65; margin-bottom: 8px; }
+#hex-detail .detail-row { font-size: 0.78rem; line-height: 1.6; }
+#hex-detail .detail-row strong { color: #b08828; }
+#realm-summary { flex: 1; overflow-y: auto; padding: 12px; }
+#realm-summary h2 { color: #c8a030; font-size: 0.8rem; letter-spacing: 2px; margin-bottom: 10px; padding-bottom: 5px; border-bottom: 1px solid #2a1a06; }
+.sec-title { color: #a07828; font-size: 0.68rem; letter-spacing: 2px; text-transform: uppercase; margin: 10px 0 5px; }
+.holding-card { margin-bottom: 8px; padding: 7px 9px; background: #130f08; border: 1px solid #2a1a06; font-size: 0.76rem; line-height: 1.55; }
+.holding-card strong { color: #c8a030; display: block; margin-bottom: 3px; }
+.holding-card .lbl { color: #806020; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 1px; }
+.myth-row { font-size: 0.78rem; line-height: 1.6; padding: 2px 0; }
+.lm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 4px; }
+.lm-card { padding: 5px 7px; background: #130f08; border: 1px solid #2a1a06; font-size: 0.72rem; line-height: 1.4; }
+.lm-card .lm-type { color: #806020; font-size: 0.65rem; letter-spacing: 1px; }
+::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-track { background: #0a0805; } ::-webkit-scrollbar-thumb { background: #3a2808; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="realm-title">MYTHIC BASTIONLAND · REALM GENERATOR</h1>
+  <div class="buttons">
+    <button onclick="generateRealm()">⟳ NEW REALM</button>
+    <button onclick="exportText()">↓ EXPORT TEXT</button>
+  </div>
+</header>
+<main>
+  <div id="map-panel"><svg id="map-svg" style="display:block"></svg></div>
+  <div id="sidebar">
+    <div id="hex-detail"><p style="opacity:0.45;font-size:0.82rem">Click a hex for details</p></div>
+    <div id="realm-summary"></div>
+  </div>
+</main>
+<script>
+// ── CONSTANTS ─────────────────────────────────────────
+const COLS = 12, ROWS = 12;
+const SZ = 38; // hex circumradius in px
+const H = Math.sqrt(3) * SZ;
+const SVG_W = Math.ceil(H * (COLS + 0.5) + 6);
+const SVG_H = Math.ceil(SZ * 1.5 * (ROWS - 1) + SZ * 2 + 6);
+
+// Hex Kit Fantasyland tile assets (pointy-top, 210×210px)
+// Rendered at SZ*2 px square, clipped to hex shape
+const HK_BASE = 'file:///G:/Hex%20Kit-win32-x64/addons/HK-Fantasyland';
+const TILE_MAP = {
+  'Marsh':   { folder: 'HK%20-%20Swamp',            stem: 'HK_swamp',        count: 41 },
+  'Heath':   { folder: 'HK%20-%20Savannah',          stem: 'HK_savannah',     count: 37 },
+  'Crags':   { folder: 'HK%20-%20Mountain',          stem: 'HK_mountain',     count: 42 },
+  'Peaks':   { folder: 'HK%20-%20Mountain',          stem: 'HK_mountain',     count: 42 },
+  'Forest':  { folder: 'HK%20-%20Forest',            stem: 'HK_forest',       count: 42 },
+  'ConiferousForest': { folder: 'HK%20-%20Coniferous%20Forest', stem: 'HK_cone-forest', count: 40 },
+  'DeadForest':       { folder: 'HK%20-%20Dead%20Forest',       stem: 'HK_dead-forest', count: 13 },
+  'Valley':  { folder: 'HK%20-%20Mixed%20Forest',    stem: 'HK_mixed-forest', count: 21 },
+  'Hills':   { folder: 'HK%20-%20Hill',              stem: 'HK_hill',         count: 42 },
+  'Meadow':  { folder: 'HK%20-%20Meadow',            stem: 'HK_meadow',       count: 23 },
+  'Bog':     { folder: 'HK%20-%20Muddy%20Bog',       stem: 'HK_muddy-bog',    count: 14 },
+  'Lakes':   { folder: 'HK%20-%20Ocean',             stem: 'HK_ocean',        count: 14 },
+  'Glades':  { folder: 'HK%20-%20Fey%20Wood',        stem: 'HK_fey-wood',     count: 26 },
+  'Plain':   { folder: 'HK%20-%20Grass',             stem: 'HK_grass',        count: 47 },
+  'Ocean':   { folder: 'HK%20-%20Ocean',             stem: 'HK_ocean',        count: 14 },
+};
+
+// Returns the tile config for a hex, applying character+landscape overrides
+function getTileConfig(char, scape) {
+  if (scape === 'Forest') {
+    if (char === 'Sharp' || char === 'Sparse') return TILE_MAP['ConiferousForest'];
+    if (char === 'Barren' || char === 'Dry')   return TILE_MAP['DeadForest'];
+  }
+  if (scape === 'Glades' && (char === 'Barren' || char === 'Dry')) return TILE_MAP['DeadForest'];
+  return TILE_MAP[scape] || null;
+}
+
+// Colour fallbacks (shown while tiles load, or if file:// access is blocked)
+const TC = {
+  'Marsh':'#3a5630','Heath':'#857040','Crags':'#5e5e65','Peaks':'#787888',
+  'Forest':'#1e4818','Valley':'#38581e','Hills':'#486828','Meadow':'#688840',
+  'Bog':'#264822','Lakes':'#1e4868','Glades':'#285828','Plain':'#688042',
+  'Ocean':'#102848'
+};
+
+// ── TABLES ────────────────────────────────────────────
+const LAND_CHAR  = ['Barren','Dry','Grey','Sparse','Sharp','Teeming','Still','Soft','Overgrown','Vivid','Sodden','Lush'];
+const LAND_SCAPE = ['Marsh','Heath','Crags','Peaks','Forest','Valley','Hills','Meadow','Bog','Lakes','Glades','Plain'];
+
+const KNIGHTS = [
+  ['The True Knight','The Snare Knight','The Tourney Knight','The Bloody Knight','The Moss Knight','The War Knight','The Willow Knight','The Gilded Knight','The Saddle Knight','The Riddle Knight','The Talon Knight','The Barbed Knight'],
+  ['The Trail Knight','The Amber Knight','The Horde Knight','The Emerald Knight','The Chain Knight','The Banner Knight','The Pigeon Knight','The Shield Knight','The Whip Knight','The Seal Knight','The Horn Knight','The Dove Knight'],
+  ['The Story Knight','The Turtle Knight','The Key Knight','The Moat Knight','The Boulder Knight','The Tankard Knight','The Owl Knight','The Hooded Knight','The Lance Knight','The Questing Knight','The Ring Knight','The Forge Knight'],
+  ['The Rune Knight','The Gallows Knight','The Tome Knight','The Meteor Knight','The Gazer Knight','The Mule Knight','The Halo Knight','The Iron Knight','The Mirror Knight','The Dusk Knight','The Coin Knight','The Mock Knight'],
+  ['The Mask Knight','The Bone Knight','The Salt Knight','The Violet Knight','The Cosmic Knight','The Temple Knight','The Fox Knight','The Gull Knight','The Magpie Knight','The Reliquary Knight','The Vulture Knight','The Free Knight'],
+  ['The Silk Knight','The Tiger Knight','The Leaf Knight','The Glass Knight','The Hive Knight','The Ghoul Knight','The Weaver Knight','The Thunder Knight','The Dust Knight','The Fanged Knight','The Pearl Knight','The Rat Knight']
+];
+const MYTHS = [
+  ['The Plague','The Wall','The Shadow','The River','The Wyvern','The Goblin','The Forest','The Child','The Order','The Dead','The Underworld','The Wurm'],
+  ['The Pack','The Eye','The Blade','The Legion','The Imp','The Troll','The Demon','The Sea','The Elf','The Axe','The Dwarf','The Tower'],
+  ['The Chariot','The Desert','The Mountain','The Star','The Sun','The Moon','The Lion','The Wheel','The Cudgel','The Lizard','The Ogre','The Spider'],
+  ['The Coven','The Lich','The Wight','The Spectre','The Wraith','The Beast','The Judge','The Crown','The Boar','The Eagle','The Bat','The Toad'],
+  ['The Colossus','The Fortress','The Citadel','The Catacomb','The Hound','The Glade','The Tournament','The Bull','The Hydra','The Spire','The Sprite','The Hole'],
+  ['The Mist','The Gargoyle','The Changeling','The Inferno','The Harp','The Tree','The Pool','The Elephant','The Snail','The Cave','The Apparatus','The Rock']
+];
+
+const HOLDING_TBL = [['Dark','Ruined','Hostile','Ancient','Ornate','Wild','Pristine','Fortified','Unfinished','Welcoming','Proud','Bright'],['Turrets','Tower','Wall','Battlements','Citadel','Gate','Spire','Dome','Beacons','Bridge','Pillars','Moat']];
+const BAILEY_TBL  = [['Filthy','Abandoned','Joyous','Sophisticated','Industrious','Humble','Majestic','Hallowed','Rustic','Solemn','Bustling','Immaculate'],['Marketplace','Forge','Library','Fountain','Temple','Forum','Tomb','Garden','Hall','Workshops','Arena','Garrison']];
+const KEEP_TBL    = [['Hearth','Throne','Musicians','Pool','Advisers','Servants','Shrine','Table','Reliquary','Cauldron','Chandelier','Guards'],['Antlers','Silver','Heraldry','Bones','Flowers','Scripture','Jewels','Wreaths','Candles','Fur','Tapestries','Shields']];
+const WOE_TBL     = [['Secretive','Violent','Looming','Sudden','Ongoing','Prophesised','Mysterious','Sanctioned','Unseen','Vast','Escalating','Concealed'],['Disease','Famine','Raids','Invasion','Abduction','Storm','Fire','Revolt','Exodus','Beast','Killing','Theft']];
+const DRAMA_TBL   = [['Betrayal','Jealousy','Rivalry','Infidelity','Coup','Ambition','Redemption','Revelation','Wrath','Greed','Banishment','Manipulation'],['Brawl','Poison','Oath','Feast','Letters','Disguise','Inheritance','Assassin','Family','Alcohol','Blackmail','Gold']];
+const DESIRE_TBL  = [['Escape','Wealth','Status','Knowledge','Mastery','Heirloom','Marriage','Truth','Travel','Power','Security','Forgiveness'],['Freedom','Love','Legacy','Recovery','Revenge','Duty','Fear','Guilt','Recognition','Defiance','Curiosity','Hatred']];
+const APPEAR_TBL  = [['Delicate','Short','Robust','Hard','Haggard','Cold','Warm','Youthful','Soft','Sickly','Tall','Rough'],['Armoured','Tattered','Vibrant','Crude','Eclectic','Traditional','Comfortable','Gaudy','Drab','Decorated','Functional','Elegant']];
+const REL_TBL     = [['Adoring','Reluctant','Secret','Estranged','Hateful','Distant','Harmonious','Intimate','Recent','Sworn','Tumultuous','Resentful'],['Kin','Friend','Lover','Spouse','Supporter','Ally','Rival','Successor','Mentor','Peer','Enemy','Guardian']];
+const TASK_TBL    = [['Investigate','Capture','Destroy','Transport','Retrieve','Mend','Break','Guard','Aid','Salvage','Conceal','Hunt'],['Knight','Seer','Vassals','Livestock','Monument','Gold','Ruin','Animals','Dwelling','Holding','Bridge','Warband']];
+const PERS_TBL    = [['Cautious','Spiritual','Intellectual','Ambitious','Serene','Righteous','Empathetic','Unstable','Prying','Melancholic','Cynical','Rash'],['Botany','History','Music','Gambling','Animals','Art','Cookery','Craft','Fishing','Fashion','Hunting','Stories']];
+const FEATURE_TBL = [['Buried','Colourful','Adorned','Spiked','Split','Entombed','Reflective','Veiled','Hot','Drowned','Desecrated','Isolated'],['Brook','Seat','Pit','Cave','Monolith','Mound','Cairn','Pond','Waterfall','Spring','Arch','Henge']];
+const WONDER_TBL  = [['Pleasure','Secrets','Prophecy','Healing','Desire','Memory','Death','Strength','Temptation','Pain','Regret','Time'],['Light','Flames','Stones','Beasts','Sparks','Trails','Mist','Colours','Plants','Wind','Water','Shadows']];
+
+const COMMONER_TYPES = ['Intolerant Herder','Argumentative Sage','Weary Merchant','Bold Warden','Pious Keeper','Proud Smith','Suspicious Elder','Devout Pilgrim','Rough Miller','Wandering Bard'];
+const COMMONER_NAMES = ['Aldric','Maren','Oswin','Blyth','Edric','Sera','Thane','Wynn','Gorin','Lira','Holt','Vera','Croft','Nessa','Brand'];
+const SEERS = ['The Winged Seer','The Blind Seer','The Salt Seer','The Marsh Seer','The Stone Seer','The Iron Seer','The Root Seer','The Bone Seer','The Flame Seer','The Tide Seer','The Star Seer','The Moss Seer'];
+const HOLDING_NAMES = ['The Roost','The Barrow','The Pale','The Warren','The Fold','Ashgate','Stonewatch','The Cradle','The Reach','Duskwall','Ironmere','The Hold','Brightwater','The Mere','Coldfen','The Spire','Thorngate','Millcroft','Redcliff','Graymoor','Saltwick','The Crossing','Old Anvil','The Brow','Dunholt','Fallowhaven','Moorgate','The Nave'];
+const REALM_WORDS = [['Grey','Dark','High','Old','Cold','Wild','Fair','Long','Deep','Black','White','Iron','Fell','Mist','Still'],['moor','march','vale','wood','heath','fell','reach','hold','waste','mere','fen','cliff','shore','pass','crest']];
+
+// ── UTILS ─────────────────────────────────────────────
+const d = n => Math.floor(Math.random() * n) + 1;
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const roll = t => t[0][d(12)-1] + ' ' + t[1][d(12)-1];
+const rollKnight = () => KNIGHTS[d(6)-1][d(12)-1];
+const rollMyth   = () => MYTHS[d(6)-1][d(12)-1];
+const idx = (c, r) => r * COLS + c;
+
+function tileURL(terrain, tileNum) {
+  const t = TILE_MAP[terrain];
+  if (!t) return null;
+  const n = String(tileNum).padStart(3, '0');
+  return `${HK_BASE}/${t.folder}/${t.stem}_${n}.png`;
+}
+
+// ── HEX MATH (pointy-top, odd-r offset) ───────────────
+function hexXY(col, row) {
+  return [
+    H * (col + (row % 2 === 1 ? 0.5 : 0)) + SZ + 3,
+    SZ * 1.5 * row + SZ + 3
+  ];
+}
+
+function hexPts(cx, cy) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI / 180 * (60 * i - 30);
+    pts.push(`${(cx + SZ * Math.cos(a)).toFixed(1)},${(cy + SZ * Math.sin(a)).toFixed(1)}`);
+  }
+  return pts.join(' ');
+}
+
+function neighbors(col, row) {
+  const dirs = row % 2 === 0
+    ? [[1,0],[-1,0],[0,-1],[-1,-1],[0,1],[-1,1]]
+    : [[1,0],[-1,0],[1,-1],[0,-1],[1,1],[0,1]];
+  return dirs.map(([dc,dr]) => [col+dc, row+dr])
+    .filter(([c,r]) => c >= 0 && c < COLS && r >= 0 && r < ROWS);
+}
+
+function hexDist(c1,r1,c2,r2) {
+  const x1 = c1-(r1-(r1&1))/2, z1=r1, y1=-x1-z1;
+  const x2 = c2-(r2-(r2&1))/2, z2=r2, y2=-x2-z2;
+  return Math.max(Math.abs(x1-x2),Math.abs(y1-y2),Math.abs(z1-z2));
+}
+
+// ── GENERATION ────────────────────────────────────────
+let realm = null;
+
+function generateRealm() {
+  const hexes = Array.from({length: ROWS * COLS}, (_, i) => ({
+    col: i % COLS, row: Math.floor(i / COLS),
+    terrain: null, character: null, tile: null,
+    content: null, barrier: false, river: false
+  }));
+  realm = { hexes, holdings: [], myths: [], landmarks: {}, riverPath: [], name: genRealmName() };
+
+  buildTerrain(hexes);
+  assignOceanTiles(hexes);
+  buildRiver(hexes);
+  buildBarriers(hexes);
+  buildHoldings();
+  buildMyths();
+  buildLandmarks();
+
+  document.getElementById('realm-title').textContent = realm.name.toUpperCase() + ' · MYTHIC BASTIONLAND';
+  renderMap();
+  renderSummary();
+  document.getElementById('hex-detail').innerHTML = '<p style="opacity:0.45;font-size:0.82rem">Click a hex for details</p>';
+}
+
+function genRealmName() {
+  return `The ${pick(REALM_WORDS[0])}${pick(REALM_WORDS[1])}`;
+}
+
+function buildTerrain(hexes) {
+  const TARGET = Math.floor(COLS * ROWS * 0.67);
+  let land = 0;
+  while (land < TARGET) {
+    const unset = hexes.filter(h => !h.terrain);
+    if (!unset.length) break;
+    const char   = LAND_CHAR[d(12)-1];
+    const scape  = LAND_SCAPE[d(12)-1];
+    const size   = Math.min(d(12), TARGET - land, unset.length);
+    const adj    = unset.filter(h => neighbors(h.col,h.row).some(([nc,nr]) => hexes[idx(nc,nr)].terrain));
+    const seed   = (land === 0 || Math.random() < 0.3 || !adj.length) ? pick(unset) : pick(adj);
+    const cluster = new Set([idx(seed.col, seed.row)]);
+    const front  = neighbors(seed.col, seed.row).filter(([nc,nr]) => !hexes[idx(nc,nr)].terrain);
+    while (cluster.size < size && front.length) {
+      const fi = Math.floor(Math.random() * front.length);
+      const [nc,nr] = front.splice(fi,1)[0];
+      const ni = idx(nc,nr);
+      if (cluster.has(ni) || hexes[ni].terrain) continue;
+      cluster.add(ni);
+      neighbors(nc,nr).filter(([nnc,nnr]) => !hexes[idx(nnc,nnr)].terrain && !cluster.has(idx(nnc,nnr))).forEach(p => front.push(p));
+    }
+    for (const hi of cluster) {
+      if (!hexes[hi].terrain) {
+        const t = getTileConfig(char, scape);
+        hexes[hi].terrain   = scape;
+        hexes[hi].character = char;
+        hexes[hi].tile      = t ? (Math.floor(Math.random() * t.count) + 1) : 1;
+        land++;
+      }
+    }
+  }
+}
+
+function assignOceanTiles(hexes) {
+  const t = TILE_MAP['Ocean'];
+  hexes.filter(h => !h.terrain).forEach(h => {
+    h.tile = t ? (Math.floor(Math.random() * t.count) + 1) : 1;
+  });
+}
+
+function buildRiver(hexes) {
+  const land = hexes.filter(h => h.terrain);
+  if (!land.length) return;
+  const top = land.filter(h => h.row < 4);
+  if (!top.length) return;
+  let cur = pick(top);
+  const path = [cur];
+  const seen = new Set([idx(cur.col,cur.row)]);
+  for (let step = 0; step < 18; step++) {
+    const nbrs = neighbors(cur.col,cur.row).filter(([nc,nr]) => !seen.has(idx(nc,nr)));
+    if (!nbrs.length) break;
+    const scored = nbrs.map(([nc,nr]) => ({ nc, nr, s: nr*2+(Math.random()-0.5)*3+(!hexes[idx(nc,nr)].terrain?6:0) }));
+    scored.sort((a,b) => b.s-a.s);
+    const {nc,nr} = scored[0];
+    cur = hexes[idx(nc,nr)];
+    seen.add(idx(nc,nr));
+    if (cur.terrain) { cur.river = true; path.push(cur); } else break;
+  }
+  realm.riverPath = path.filter(h => h.terrain);
+}
+
+function buildBarriers(hexes) {
+  const land = hexes.filter(h => h.terrain);
+  const count = Math.round(land.length / 6);
+  const pref  = land.filter(h => ['Crags','Peaks','Hills'].includes(h.terrain));
+  const pool  = (pref.length >= count/2 ? [...pref, ...land.filter(h => !pref.includes(h))] : land).sort(() => Math.random()-0.5);
+  pool.slice(0, count).forEach(h => h.barrier = true);
+}
+
+function buildHoldings() {
+  const land = realm.hexes.filter(h => h.terrain && !h.content);
+  const usedNames = new Set();
+  const picked = [];
+  for (const minD of [5,4,3,2]) {
+    const shuf = land.slice().sort(() => Math.random()-0.5);
+    picked.length = 0;
+    for (const h of shuf) {
+      if (picked.length >= 4) break;
+      if (picked.every(p => hexDist(h.col,h.row,p.col,p.row) >= minD)) picked.push(h);
+    }
+    if (picked.length === 4) break;
+  }
+  const labels = ['A','B','C','D'];
+  picked.forEach((hex, i) => {
+    const isKnight = i === 0 || Math.random() > 0.35;
+    const ruler    = isKnight ? rollKnight() : pick(COMMONER_TYPES);
+    const rulerName = isKnight ? null : pick(COMMONER_NAMES);
+    let name; do { name = pick(HOLDING_NAMES); } while (usedNames.has(name));
+    usedNames.add(name);
+    const h = { label:labels[i], hex:{col:hex.col,row:hex.row}, seat:i===0, ruler, rulerName, name,
+      exterior:roll(HOLDING_TBL), bailey:roll(BAILEY_TBL), keep:roll(KEEP_TBL),
+      woe:roll(WOE_TBL), drama:roll(DRAMA_TBL), desire:roll(DESIRE_TBL),
+      appearance:roll(APPEAR_TBL), personality:roll(PERS_TBL), quest:roll(TASK_TBL), rels:[] };
+    realm.holdings.push(h);
+    hex.content = { type:'holding', data:h };
+  });
+  for (let i=1; i<realm.holdings.length; i++) realm.holdings[i].rels.push({ to:realm.holdings[0].label, name:realm.holdings[0].ruler, rel:roll(REL_TBL) });
+  if (realm.holdings.length >= 3) realm.holdings[2].rels.push({ to:realm.holdings[1].label, name:realm.holdings[1].ruler, rel:roll(REL_TBL) });
+}
+
+function buildMyths() {
+  const used = new Set();
+  const holdHexes = realm.holdings.map(h => h.hex);
+  const remote = realm.hexes.filter(h => h.terrain && !h.content && holdHexes.every(hh => hexDist(h.col,h.row,hh.col,hh.row) >= 3)).sort(() => Math.random()-0.5);
+  const fallback = realm.hexes.filter(h => h.terrain && !h.content).sort(() => Math.random()-0.5);
+  for (let i=0; i<6; i++) {
+    const hex = remote[i] || fallback[i];
+    if (!hex) continue;
+    let name, tries=0;
+    do { name = rollMyth(); tries++; } while (used.has(name) && tries < 30);
+    used.add(name);
+    const myth = { number:i+1, name, hex:{col:hex.col,row:hex.row} };
+    realm.myths.push(myth);
+    hex.content = { type:'myth', data:myth };
+  }
+}
+
+function buildLandmarks() {
+  const types = [
+    { key:'dwellings', icon:'♥', gen:() => pick(['Hidden cave','Lakeside hermit hut','Woodland homestead','Cliffside refuge','Marsh cottage','River keeper\'s post','Ruined farmstead (occupied)','Shepherd\'s camp']) },
+    { key:'sanctums',  icon:'☽', gen:() => pick(SEERS) + ' — ' + roll(FEATURE_TBL) },
+    { key:'monuments', icon:'◆', gen:() => roll(WONDER_TBL) + ' monument' },
+    { key:'hazards',   icon:'!', gen:() => pick(['Sinking ground','Flash floods','Rockfall','Toxic vapours','Slippery rocks','Choking thorns','Blinding fog','Unstable ice','Quicksand','Biting insects']) },
+    { key:'curses',    icon:'☠', gen:() => pick(['Haunting lights','Disorienting mist','Whispered fears','Spiralling paths','False horizons','Eerie silence','Time distortion','Mirrored landscape','Forgetting fog']) },
+    { key:'ruins',     icon:'†', gen:() => 'Echoes of ' + pick(MYTHS.flat()) }
+  ];
+  types.forEach(t => { realm.landmarks[t.key] = []; });
+  const avail = realm.hexes.filter(h => h.terrain && !h.content).sort(() => Math.random()-0.5);
+  let ai = 0;
+  for (const t of types) {
+    for (let i=0; i<3 && ai<avail.length; i++, ai++) {
+      const hex = avail[ai];
+      const lm = { icon:t.icon, description:t.gen(), hex:{col:hex.col,row:hex.row} };
+      realm.landmarks[t.key].push(lm);
+      hex.content = { type:'landmark', subtype:t.key, data:lm };
+    }
+  }
+}
+
+// ── RENDERING ─────────────────────────────────────────
+function renderMap() {
+  const svg = document.getElementById('map-svg');
+  svg.setAttribute('width', SVG_W);
+  svg.setAttribute('height', SVG_H);
+
+  const parts = [];
+
+  // ① Clip paths — one per hex, used to confine tile images to hex shape
+  parts.push('<defs>');
+  realm.hexes.forEach(h => {
+    const [cx,cy] = hexXY(h.col, h.row);
+    parts.push(`<clipPath id="cp-${h.col}-${h.row}"><polygon points="${hexPts(cx,cy)}"/></clipPath>`);
+  });
+  parts.push('</defs>');
+
+  // ② Each hex: colour fallback → tile image → border polygon → label
+  realm.hexes.forEach(h => {
+    const [cx,cy] = hexXY(h.col, h.row);
+    const pts     = hexPts(cx, cy);
+    const terrain = h.terrain || 'Ocean';
+    const fill    = TC[terrain];
+
+    // Colour fallback (always visible; hidden once tile loads on top)
+    parts.push(`<polygon points="${pts}" fill="${fill}" stroke="none"/>`);
+
+    // Hex Kit tile image (clipped to hex shape; covers colour fallback when loaded)
+    const url = tileURL(terrain, h.tile);
+    if (url) {
+      const ti = SZ * 2;
+      parts.push(`<image href="${url}" x="${(cx-SZ).toFixed(1)}" y="${(cy-SZ).toFixed(1)}" width="${ti}" height="${ti}" clip-path="url(#cp-${h.col}-${h.row})" preserveAspectRatio="xMidYMid meet" style="pointer-events:none"/>`);
+    }
+
+    // River hex overlay — semi-transparent blue tint
+    if (h.river) {
+      parts.push(`<polygon points="${pts}" fill="#224499" fill-opacity="0.38" stroke="none" style="pointer-events:none"/>`);
+    }
+
+    // Border + click target — fill:transparent catches interior clicks; fill:none does not
+    const bStroke = h.barrier ? '#cc7700' : '#00000066';
+    const bWidth  = h.barrier ? 2.5 : 0.7;
+    parts.push(`<polygon points="${pts}" fill="transparent" stroke="${bStroke}" stroke-width="${bWidth}" data-col="${h.col}" data-row="${h.row}" onclick="onHex(${h.col},${h.row})" style="cursor:pointer"/>`);
+
+    // Content label (shadow + white text for readability over tiles)
+    if (h.content) {
+      const { type, subtype, data } = h.content;
+      let txt = '', fs = 13;
+      if (type === 'holding') { txt = data.seat ? '★' + data.label : data.label; fs = 12; }
+      else if (type === 'myth')     { txt = String(data.number); fs = 13; }
+      else if (type === 'landmark') { txt = data.icon; fs = 14; }
+      const bx = (cx).toFixed(1), by1 = (cy+5.5).toFixed(1), by2 = (cy+5).toFixed(1);
+      parts.push(`<text x="${bx}" y="${by1}" text-anchor="middle" font-size="${fs+1}" font-family="serif" fill="#000000cc" style="pointer-events:none;user-select:none">${txt}</text>`);
+      parts.push(`<text x="${bx}" y="${by2}" text-anchor="middle" font-size="${fs}" font-family="serif" fill="#ffffff" font-weight="bold" style="pointer-events:none;user-select:none">${txt}</text>`);
+    }
+  });
+
+  // ③ River — rendered as per-hex blue overlay above; no polyline needed
+
+  // ④ Legend
+  const ly = SVG_H - 6;
+  parts.push(`
+    <rect x="4" y="${ly-78}" width="216" height="76" fill="#000000cc" rx="3"/>
+    <text x="10" y="${ly-63}" font-size="8.5" fill="#c8a030" font-family="serif">★A = Seat of Power  ·  A B C D = Holdings</text>
+    <text x="10" y="${ly-50}" font-size="8.5" fill="#c8a030" font-family="serif">1–6 = Myths</text>
+    <text x="10" y="${ly-37}" font-size="8.5" fill="#c8a030" font-family="serif">♥ Dwelling  ☽ Sanctum  ◆ Monument</text>
+    <text x="10" y="${ly-24}" font-size="8.5" fill="#c8a030" font-family="serif">! Hazard  ☠ Curse  † Ruin</text>
+    <text x="10" y="${ly-11}" font-size="8.5" fill="#cc7700" font-family="serif">Orange border = Barrier</text>
+    <text x="10" y="${ly-0}"  font-size="8.5" fill="#5577cc" font-family="serif">Blue tint = River</text>
+  `);
+
+  svg.innerHTML = parts.join('');
+}
+
+function onHex(col, row) {
+  document.querySelectorAll('polygon[data-selected]').forEach(p => {
+    p.removeAttribute('data-selected');
+    const hx = realm.hexes[idx(+p.dataset.col, +p.dataset.row)];
+    p.setAttribute('fill', 'transparent');
+    p.setAttribute('stroke', hx.barrier ? '#cc7700' : '#00000066');
+    p.setAttribute('stroke-width', hx.barrier ? 2.5 : 0.7);
+  });
+  const el = document.querySelector(`polygon[data-col="${col}"][data-row="${row}"]`);
+  if (el) { el.setAttribute('data-selected','1'); el.setAttribute('fill','transparent'); el.setAttribute('stroke','#ffcc00'); el.setAttribute('stroke-width','2.5'); }
+  renderDetail(realm.hexes[idx(col,row)]);
+}
+
+function renderDetail(h) {
+  const label = h.terrain ? `${h.character} ${h.terrain}` : 'Ocean';
+  let html = `<div class="terrain-tag">[${h.col},${h.row}] ${label}`;
+  if (h.barrier) html += ' <span style="color:#cc7700">· Barrier</span>';
+  if (h.river)   html += ' <span style="color:#5577cc">· River</span>';
+  html += '</div>';
+  if (!h.content) {
+    html += `<p style="font-size:0.78rem;opacity:0.55">Wilderness hex. No landmark here.</p>`;
+  } else {
+    const { type, subtype, data } = h.content;
+    if (type === 'holding') {
+      html += `<h3>${data.seat ? '★ Seat of Power' : 'Holding'}: ${data.name} (${data.label})</h3>`;
+      html += `<div class="detail-row">`;
+      html += `<strong>Ruler:</strong> ${data.rulerName ? data.rulerName+', ' : ''}${data.ruler}<br>`;
+      html += `<strong>Exterior:</strong> ${data.exterior}<br>`;
+      html += `<strong>Bailey:</strong> ${data.bailey}<br>`;
+      html += `<strong>Keep:</strong> ${data.keep}<br>`;
+      html += `<strong>Appearance:</strong> ${data.appearance}<br>`;
+      html += `<strong>Desires:</strong> ${data.desire}<br>`;
+      html += `<strong>Personality:</strong> ${data.personality}<br>`;
+      html += `<strong>Woe:</strong> ${data.woe}<br>`;
+      html += `<strong>Drama:</strong> ${data.drama}<br>`;
+      html += `<strong>Quest:</strong> ${data.quest}`;
+      if (data.rels.length) html += '<br>' + data.rels.map(r => `<strong>Re ${r.to}:</strong> ${r.rel} with ${r.name}`).join('<br>');
+      html += '</div>';
+    } else if (type === 'myth') {
+      html += `<h3>Myth ${data.number}: ${data.name}</h3>`;
+      html += `<div class="detail-row">A Myth hex. Six Omens reveal themselves as Knights explore. The hex's terrain is visually shaped by the Myth's presence.</div>`;
+    } else {
+      const labels = { dwellings:'Dwelling', sanctums:'Sanctum', monuments:'Monument', hazards:'Hazard', curses:'Curse', ruins:'Ruin' };
+      html += `<h3>${data.icon} ${labels[subtype]}</h3><div class="detail-row">${data.description}</div>`;
+    }
+  }
+  document.getElementById('hex-detail').innerHTML = html;
+}
+
+function renderSummary() {
+  let html = `<h2>${realm.name.toUpperCase()}</h2>`;
+  html += `<div class="sec-title">Holdings</div>`;
+  realm.holdings.forEach(h => {
+    html += `<div class="holding-card"><strong>${h.label}. ${h.name}${h.seat?' ★':''}</strong>
+      <span class="lbl">Ruler</span> ${h.rulerName?h.rulerName+', ':''}${h.ruler}<br>
+      <span class="lbl">Woe</span> ${h.woe}<br>
+      <span class="lbl">Quest</span> ${h.quest}</div>`;
+  });
+  html += `<div class="sec-title">Active Myths</div>`;
+  realm.myths.forEach(m => {
+    html += `<div class="myth-row">${m.number}. <strong style="color:#c8a030">${m.name}</strong> — [${m.hex.col},${m.hex.row}]</div>`;
+  });
+  html += `<div class="sec-title">Landmarks</div><div class="lm-grid">`;
+  [['dwellings','♥ Dwelling'],['sanctums','☽ Sanctum'],['monuments','◆ Monument'],['hazards','! Hazard'],['curses','☠ Curse'],['ruins','† Ruin']].forEach(([key,label]) => {
+    (realm.landmarks[key]||[]).forEach(lm => {
+      html += `<div class="lm-card"><div class="lm-type">${label}</div>[${lm.hex.col},${lm.hex.row}] ${lm.description}</div>`;
+    });
+  });
+  html += '</div>';
+  document.getElementById('realm-summary').innerHTML = html;
+}
+
+// ── EXPORT ────────────────────────────────────────────
+function exportText() {
+  if (!realm) return;
+  const L = [];
+  L.push(realm.name.toUpperCase() + ' — MYTHIC BASTIONLAND REALM');
+  L.push('═'.repeat(50));
+  L.push('\nHOLDINGS\n' + '─'.repeat(40));
+  realm.holdings.forEach(h => {
+    L.push(`\n[${h.label}] ${h.name}${h.seat?' (Seat of Power)':''}`);
+    L.push(`  Hex: [${h.hex.col},${h.hex.row}]`);
+    L.push(`  Ruler: ${h.rulerName?h.rulerName+', ':''}${h.ruler}`);
+    L.push(`  Exterior: ${h.exterior}`,`  Bailey: ${h.bailey}`,`  Keep: ${h.keep}`);
+    L.push(`  Appearance: ${h.appearance}`,`  Desires: ${h.desire}`,`  Personality: ${h.personality}`);
+    L.push(`  Woe: ${h.woe}`,`  Drama: ${h.drama}`,`  Quest: ${h.quest}`);
+    h.rels.forEach(r => L.push(`  → Re ${r.to} (${r.name}): ${r.rel}`));
+  });
+  L.push('\nMYTHS\n' + '─'.repeat(40));
+  realm.myths.forEach(m => L.push(`${m.number}. ${m.name} — [${m.hex.col},${m.hex.row}]`));
+  L.push('\nLANDMARKS\n' + '─'.repeat(40));
+  ['dwellings','sanctums','monuments','hazards','curses','ruins'].forEach(key => {
+    L.push(`\n${key.toUpperCase()}`);
+    (realm.landmarks[key]||[]).forEach(lm => L.push(`  [${lm.hex.col},${lm.hex.row}] ${lm.description}`));
+  });
+  L.push('\nTERRAIN GRID (2-char, ~~ = ocean)\n' + '─'.repeat(40));
+  for (let r=0; r<ROWS; r++) {
+    let row = r%2===1?' ':'';
+    for (let c=0; c<COLS; c++) { const h=realm.hexes[idx(c,r)]; row+=(h.terrain?h.terrain.substring(0,2).toUpperCase():'~~')+' '; }
+    L.push(row);
+  }
+  const blob = new Blob([L.join('\n')], {type:'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (realm.name||'realm').replace(/\s+/g,'_')+'.txt';
+  a.click();
+}
+
+// ── INIT ──────────────────────────────────────────────
+// On web (https://) the Hex Kit tile paths won't resolve — colour fallback renders instead.
+// On local file:// with Hex Kit installed at G:\, full illustrated tiles load.
+const TILES_AVAILABLE = location.protocol === 'file:';
+if (!TILES_AVAILABLE) {
+  const note = document.createElement('span');
+  note.style.cssText = 'font-size:0.68rem;color:#806020;letter-spacing:1px;margin-left:12px;opacity:0.8';
+  note.textContent = 'COLOUR MODE — TILES REQUIRE LOCAL INSTALL';
+  document.querySelector('header h1').after(note);
+}
+
+generateRealm();
+</script>
+</body>
+</html>
