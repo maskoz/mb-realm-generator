@@ -30,6 +30,14 @@ main { display: flex; flex: 1; overflow: hidden; }
 .lm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 4px; }
 .lm-card { padding: 5px 7px; background: #130f08; border: 1px solid #2a1a06; font-size: 0.72rem; line-height: 1.4; }
 .lm-card .lm-type { color: #806020; font-size: 0.65rem; letter-spacing: 1px; }
+.pgref { color: #7a6430; font-size: 0.85em; font-style: italic; white-space: nowrap; text-decoration: none; }
+a.pgref:hover { color: #f0d060; text-decoration: underline; }
+#reader { display: none; position: fixed; inset: 0; background: #000000aa; z-index: 50; align-items: center; justify-content: center; }
+#reader-box { width: min(680px, 92vw); max-height: 84vh; display: flex; flex-direction: column; background: #130f08; border: 1px solid #5a3d0f; box-shadow: 0 8px 40px #000; }
+#reader-head { display: flex; align-items: center; padding: 9px 14px; border-bottom: 1px solid #2a1a06; color: #c8a030; font-size: 0.8rem; letter-spacing: 2px; }
+#reader-head button, #reader-head a { background: transparent; color: #c8a030; border: 1px solid #5a3d0f; padding: 2px 9px; cursor: pointer; font-family: inherit; font-size: 0.75rem; text-decoration: none; }
+#reader-head button:hover, #reader-head a:hover { background: #5a3d0f; color: #f0d060; }
+#reader-body { overflow-y: auto; padding: 16px 20px; font-size: 0.85rem; line-height: 1.65; color: #ddd0a0; white-space: pre-wrap; }
 ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-track { background: #0a0805; } ::-webkit-scrollbar-thumb { background: #3a2808; }
 </style>
 </head>
@@ -40,6 +48,9 @@ main { display: flex; flex: 1; overflow: hidden; }
   <div class="buttons">
     <button onclick="generateRealm()">⟳ NEW REALM</button>
     <button onclick="exportText()">↓ EXPORT TEXT</button>
+    <button onclick="exportMapPNG('gm')">↓ GM MAP</button>
+    <button onclick="exportMapPNG('player')">↓ PLAYER MAP</button>
+    <button onclick="exportMapPNG('terrain')">↓ TERRAIN MAP</button>
   </div>
 </header>
 <main>
@@ -47,8 +58,30 @@ main { display: flex; flex: 1; overflow: hidden; }
   <div id="sidebar">
     <div id="hex-detail"><p style="opacity:0.45;font-size:0.82rem">Click a hex for details</p></div>
     <div id="realm-summary"></div>
+    <div id="map-legend" style="margin-top:1.2rem;padding:0.6rem 0.8rem;background:#111;border:1px solid #333;font-size:0.78rem;line-height:1.7;color:#c8a030;">
+      <div>★A = Seat of Power &nbsp;·&nbsp; A B C D = Holdings</div>
+      <div>1–6 = Myths</div>
+      <div>♥ Dwelling &nbsp; ☽ Sanctum &nbsp; ◆ Monument</div>
+      <div>! Hazard &nbsp; ☠ Curse &nbsp; † Ruin</div>
+      <div><a href="#" onclick="showBarrierRules();return false" style="color:#cc7700;text-decoration:none;border-bottom:1px dotted #cc7700" title="Read the Barrier rules (p.14)">Orange border = Barrier</a></div>
+      <div><a href="#" onclick="showRiverRules();return false" style="color:#5577cc;text-decoration:none;border-bottom:1px dotted #5577cc" title="Read the River rules (p.14)">Blue line = River</a></div>
+    </div>
   </div>
 </main>
+<div id="reader" onclick="if(event.target===this)hideReader()">
+  <div id="reader-box">
+    <div id="reader-head">
+      <span id="reader-title"></span>
+      <span style="margin-left:auto;display:flex;gap:10px;align-items:center">
+        <button id="reader-prev" title="Previous page">‹</button>
+        <button id="reader-next" title="Next page">›</button>
+        <a id="reader-pdf" href="#" target="mb-pdf" title="Open this page in the PDF">PDF</a>
+        <button onclick="hideReader()" title="Close (Esc)">✕</button>
+      </span>
+    </div>
+    <div id="reader-body"></div>
+  </div>
+</div>
 <script>
 // ── CONSTANTS ─────────────────────────────────────────
 const COLS = 12, ROWS = 12;
@@ -62,7 +95,9 @@ const SVG_H = Math.ceil(H  * (ROWS + 0.5) + 6);
 // ── TILESET ───────────────────────────────────────────
 // Realm Hexes Tileset — flat-top, 560×485px, designed for Mythic Bastionland
 // Folder and stem names directly encode MB character+landscape combinations.
-const TILESET_BASE = './Realm%20Hexes%20Tileset';
+const TILESET_BASE = location.protocol === 'file:'
+  ? 'E:/DnD/Mythic%20Bastionland/Realm%20Hexes%20Tileset'
+  : './Realm%20Hexes%20Tileset';
 
 const TILES = {
   Bog:       { f:'Bog',                  s:'bog',                    n:3 },
@@ -117,6 +152,15 @@ function getTileConfig(char, scape) {
   if (scape === 'Ocean') { return TILES.Water; }
   return null;
 }
+
+// Probe once whether the tileset is actually present; without this, browsers
+// that render broken-image placeholders (iPad Safari) fill the map with them.
+let USE_TILES = true;
+(function probeTiles() {
+  const im = new Image();
+  im.onerror = () => { USE_TILES = false; if (typeof realm !== 'undefined' && realm) renderMap(); };
+  im.src = `${TILESET_BASE}/Water/water%20-%20hex%20-%2001.png`;
+})();
 
 function tileURL(char, terrain, tileNum) {
   const t = getTileConfig(char, terrain);
@@ -182,6 +226,65 @@ const roll = t => t[0][d(12)-1] + ' ' + t[1][d(12)-1];
 const rollKnight = () => KNIGHTS[d(6)-1][d(12)-1];
 const rollMyth   = () => MYTHS[d(6)-1][d(12)-1];
 const idx  = (c, r) => r * COLS + c;
+
+// ── RULEBOOK PAGE REFERENCES ──────────────────────────
+// Knights sit on even pages 28-170 and Myths on odd pages 29-171, in list order.
+const KNIGHT_LIST = KNIGHTS.flat(), MYTH_LIST = MYTHS.flat();
+function pageRef(name) {
+  let i = KNIGHT_LIST.indexOf(name); if (i >= 0) return 28 + 2 * i;
+  i = MYTH_LIST.indexOf(name); if (i >= 0) return 29 + 2 * i;
+  return null;
+}
+// Landmark types are described in the Realm rules (p.14); Seers/Sanctums on p.20.
+const LANDMARK_PAGE = { dwellings: 14, sanctums: 20, monuments: 14, hazards: 14, curses: 14, ruins: 14 };
+// A Ruin echoing a Myth points at that Myth's own page.
+const ruinPage = desc => { const m = desc.match(/Echoes of (The .+)$/); return m ? pageRef(m[1]) : null; };
+const pg = p => p ? ` <a class="pgref" href="#" onclick="showPage(${p});return false" title="Read rulebook page ${p}">p.${p}</a>` : '';
+
+// ── INLINE RULEBOOK READER ────────────────────────────
+let MB_PAGES = null; // page number → text, lazy-loaded from MB.txt
+async function loadRulebook() {
+  if (MB_PAGES) return MB_PAGES;
+  const txt = await (await fetch('./MB.txt')).text();
+  MB_PAGES = {};
+  const parts = txt.split(/===== PAGE (\d+) =====/);
+  for (let i = 1; i < parts.length; i += 2) {
+    MB_PAGES[+parts[i]] = parts[i + 1].trim().replace(/^\d{1,3}\n/, '');
+  }
+  return MB_PAGES;
+}
+
+async function showPage(p) {
+  let pages;
+  try { pages = await loadRulebook(); }
+  catch (e) { window.open(`./MB.pdf#page=${p}`, 'mb-pdf'); return; }
+  document.getElementById('reader-title').textContent = `RULEBOOK — PAGE ${p}`;
+  document.getElementById('reader-pdf').href = `./MB.pdf#page=${p}`;
+  document.getElementById('reader-body').textContent = pages[p] ?? '(page not found)';
+  document.getElementById('reader-prev').onclick = () => showPage(p - 1);
+  document.getElementById('reader-next').onclick = () => showPage(p + 1);
+  document.getElementById('reader').style.display = 'flex';
+}
+// Show just the relevant excerpt of a page (pattern matched at runtime so no
+// rulebook text is embedded in this file).
+async function showSnippet(title, page, re) {
+  let pages;
+  try { pages = await loadRulebook(); }
+  catch (e) { window.open(`./MB.pdf#page=${page}`, 'mb-pdf'); return; }
+  const flat = (pages[page] ?? '').replace(/\s+/g, ' ');
+  const m = flat.match(re);
+  document.getElementById('reader-title').textContent = title;
+  document.getElementById('reader-pdf').href = `./MB.pdf#page=${page}`;
+  document.getElementById('reader-body').textContent = m ? m[0] : flat;
+  document.getElementById('reader-prev').onclick = () => showPage(page);
+  document.getElementById('reader-next').onclick = () => showPage(page);
+  document.getElementById('reader').style.display = 'flex';
+}
+const showBarrierRules = () => showSnippet('BARRIERS — p.14', 14, /Some Hexes have a Barrier.*?total Hexes\./);
+const showRiverRules   = () => showSnippet('RIVERS & LAKES — p.14', 14, /Most Realms have a navigable river.*?Hexes\./);
+
+function hideReader() { document.getElementById('reader').style.display = 'none'; }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideReader(); });
 
 // ── HEX MATH — flat-top, odd-q offset ─────────────────
 function hexXY(col, row) {
@@ -284,25 +387,63 @@ function assignOceanTiles(hexes) {
   });
 }
 
-function buildRiver(hexes) {
-  const land = hexes.filter(h=>h.terrain);
-  if (!land.length) return;
-  const top = land.filter(h=>h.row<4);
-  if (!top.length) return;
-  let cur = pick(top);
-  const path = [cur];
-  const seen = new Set([idx(cur.col,cur.row)]);
-  for (let step=0; step<18; step++) {
-    const nbrs = neighbors(cur.col,cur.row).filter(([nc,nr])=>!seen.has(idx(nc,nr)));
-    if (!nbrs.length) break;
-    const scored = nbrs.map(([nc,nr])=>({nc,nr,s:nr*2+(Math.random()-0.5)*3+(!hexes[idx(nc,nr)].terrain?6:0)}));
-    scored.sort((a,b)=>b.s-a.s);
-    const {nc,nr}=scored[0];
-    cur=hexes[idx(nc,nr)];
-    seen.add(idx(nc,nr));
-    if (cur.terrain){cur.river=true;path.push(cur);}else break;
+// A river rises in the mountains and flows, favouring low ground,
+// until it reaches a large body of water (3+ connected water hexes).
+const isWater = h => !h.terrain || h.terrain === 'Lakes';
+
+function waterBodySize(hexes, start, cap = 3) {
+  const seen = new Set([idx(start.col, start.row)]);
+  const queue = [start];
+  while (queue.length && seen.size < cap) {
+    const cur = queue.pop();
+    for (const [nc, nr] of neighbors(cur.col, cur.row)) {
+      const k = idx(nc, nr), h = hexes[k];
+      if (h && isWater(h) && !seen.has(k)) { seen.add(k); queue.push(h); }
+    }
   }
-  realm.riverPath=path.filter(h=>h.terrain);
+  return seen.size;
+}
+
+// Low ground that a river would carve through, vs terrain it avoids
+const FLOW_BONUS = { Valley: 3, Meadow: 2, Plain: 2, Heath: 2, Bog: 3, Marsh: 3,
+                     Forest: 0, Glades: 0, Hills: -2, Crags: -2, Peaks: -3 };
+
+function traceRiver(hexes, start) {
+  let cur = start;
+  const path = [cur];
+  const seen = new Set([idx(cur.col, cur.row)]);
+  let mouth = null;
+  for (let step = 0; step < 24; step++) {
+    const nbrs = neighbors(cur.col, cur.row).filter(([nc, nr]) => !seen.has(idx(nc, nr)));
+    if (!nbrs.length) break;
+    const scored = nbrs.map(([nc, nr]) => {
+      const h = hexes[idx(nc, nr)];
+      return { h, s: nr * 2 + (Math.random() - 0.5) * 3 + (isWater(h) ? 6 : (FLOW_BONUS[h.terrain] ?? 0)) };
+    });
+    scored.sort((a, b) => b.s - a.s);
+    const next = scored[0].h;
+    seen.add(idx(next.col, next.row));
+    if (isWater(next)) { mouth = next; break; }
+    path.push(next);
+    cur = next;
+  }
+  return { path, mouth };
+}
+
+function buildRiver(hexes) {
+  const source = tier => hexes.filter(h => tier.includes(h.terrain));
+  const starts = [source(['Peaks', 'Crags']), source(['Hills']), hexes.filter(h => h.terrain && h.row < 4)]
+    .find(s => s.length);
+  if (!starts) return;
+
+  let best = [];
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const { path, mouth } = traceRiver(hexes, pick(starts));
+    if (mouth && path.length >= 3 && waterBodySize(hexes, mouth) >= 3) { best = path; break; }
+    if (mouth && path.length > best.length) best = path; // fallback: longest river that reaches any water
+  }
+  best.forEach(h => h.river = true);
+  realm.riverPath = best;
 }
 
 function buildBarriers(hexes) {
@@ -387,6 +528,7 @@ function renderMap() {
   svg.setAttribute('height', SVG_H);
 
   const parts = [];
+  const labelParts = []; // labels drawn above the river line
 
   // Clip paths (one per hex, confines tile image to hex shape)
   parts.push('<defs>');
@@ -405,7 +547,7 @@ function renderMap() {
     parts.push(`<polygon points="${pts}" fill="${TC[terrain]||'#102848'}" stroke="none"/>`);
 
     // ② Tile image — flat-top: width=2·SZ, height=H (exact tile aspect ratio 560/485 = 2/√3)
-    const url = tileURL(h.character, terrain, h.tile);
+    const url = USE_TILES ? tileURL(h.character, terrain, h.tile) : null;
     if (url) {
       parts.push(`<image href="${url}" x="${(cx-SZ).toFixed(1)}" y="${(cy-H/2).toFixed(1)}" width="${(SZ*2).toFixed(1)}" height="${H.toFixed(1)}" clip-path="url(#cp-${h.col}-${h.row})" preserveAspectRatio="xMidYMid meet" style="pointer-events:none"/>`);
     }
@@ -427,24 +569,141 @@ function renderMap() {
       if (type==='holding') { txt=data.seat?'★'+data.label:data.label; fs=11; }
       else if (type==='myth')     { txt=String(data.number); fs=13; }
       else if (type==='landmark') { txt=data.icon; fs=14; }
-      parts.push(`<text x="${cx.toFixed(1)}" y="${(cy+5.5).toFixed(1)}" text-anchor="middle" font-size="${fs+1}" font-family="serif" fill="#000000cc" style="pointer-events:none;user-select:none">${txt}</text>`);
-      parts.push(`<text x="${cx.toFixed(1)}" y="${(cy+5).toFixed(1)}"   text-anchor="middle" font-size="${fs}"   font-family="serif" fill="#ffffff"    font-weight="bold" style="pointer-events:none;user-select:none">${txt}</text>`);
+      labelParts.push(`<text x="${cx.toFixed(1)}" y="${(cy+5.5).toFixed(1)}" text-anchor="middle" font-size="${fs+1}" font-family="serif" fill="#000000cc" style="pointer-events:none;user-select:none">${txt}</text>`);
+      labelParts.push(`<text x="${cx.toFixed(1)}" y="${(cy+5).toFixed(1)}"   text-anchor="middle" font-size="${fs}"   font-family="serif" fill="#ffffff"    font-weight="bold" style="pointer-events:none;user-select:none">${txt}</text>`);
+    }
+
+    // ⑥ Hex coordinate (matches sidebar [col,row] references)
+    if (h.terrain) {
+      labelParts.push(`<text x="${cx.toFixed(1)}" y="${(cy-H/2+9).toFixed(1)}" text-anchor="middle" font-size="6.5" font-family="sans-serif" fill="#000000" fill-opacity="0.55" style="pointer-events:none;user-select:none">${h.col},${h.row}</text>`);
     }
   });
 
-  // Legend
-  const ly = SVG_H - 6;
-  parts.push(`
-    <rect x="4" y="${ly-78}" width="216" height="76" fill="#000000cc" rx="3"/>
-    <text x="10" y="${ly-63}" font-size="8.5" fill="#c8a030" font-family="serif">★A = Seat of Power  ·  A B C D = Holdings</text>
-    <text x="10" y="${ly-50}" font-size="8.5" fill="#c8a030" font-family="serif">1–6 = Myths</text>
-    <text x="10" y="${ly-37}" font-size="8.5" fill="#c8a030" font-family="serif">♥ Dwelling  ☽ Sanctum  ◆ Monument</text>
-    <text x="10" y="${ly-24}" font-size="8.5" fill="#c8a030" font-family="serif">! Hazard  ☠ Curse  † Ruin</text>
-    <text x="10" y="${ly-11}" font-size="8.5" fill="#cc7700" font-family="serif">Orange border = Barrier</text>
-    <text x="10" y="${ly}"    font-size="8.5" fill="#5577cc" font-family="serif">Blue tint = River</text>
-  `);
+  // ⑦ River line through the river hexes' centres
+  if (realm.riverPath.length > 1) {
+    const pts = realm.riverPath.map(h => hexXY(h.col, h.row).map(v => v.toFixed(1)).join(',')).join(' ');
+    parts.push(`<polyline points="${pts}" fill="none" stroke="#2b5fbf" stroke-width="5" stroke-opacity="0.7" stroke-linecap="round" stroke-linejoin="round" style="pointer-events:none"/>`);
+  }
 
+  parts.push(...labelParts);
   svg.innerHTML = parts.join('');
+}
+
+// ── PNG MAP EXPORT ────────────────────────────────────
+// mode 'gm'      → everything: symbols, coordinates, barriers
+// mode 'player'  → terrain, rivers, holdings only (myths, landmarks, barriers hidden)
+// mode 'terrain' → the bare map: terrain and rivers, no markings at all
+async function exportMapPNG(mode) {
+  const SCALE = 3;
+
+  // Preload tile images (skipped automatically if they fail to load)
+  const cache = new Map();
+  const load = url => new Promise(res => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = () => res(null);
+    im.src = url;
+  });
+  const urls = new Set();
+  realm.hexes.forEach(h => {
+    const u = tileURL(h.character, h.terrain || 'Ocean', h.tile);
+    if (u) urls.add(u);
+  });
+  await Promise.all([...urls].map(async u => cache.set(u, await load(u))));
+
+  function draw(useImages) {
+    const canvas = document.createElement('canvas');
+    canvas.width = SVG_W * SCALE; canvas.height = SVG_H * SCALE;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(SCALE, SCALE);
+    ctx.fillStyle = '#0a0805'; ctx.fillRect(0, 0, SVG_W, SVG_H);
+
+    const hexPath = (cx, cy) => {
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = Math.PI / 3 * i;
+        const x = cx + SZ * Math.cos(a), y = cy + SZ * Math.sin(a);
+        i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      }
+      ctx.closePath();
+    };
+
+    realm.hexes.forEach(h => {
+      const [cx, cy] = hexXY(h.col, h.row);
+      const terrain = h.terrain || 'Ocean';
+
+      hexPath(cx, cy); ctx.fillStyle = TC[terrain] || '#102848'; ctx.fill();
+
+      const img = useImages ? cache.get(tileURL(h.character, terrain, h.tile)) : null;
+      if (img) {
+        ctx.save(); hexPath(cx, cy); ctx.clip();
+        ctx.drawImage(img, cx - SZ, cy - H / 2, SZ * 2, H);
+        ctx.restore();
+      }
+
+      if (h.river) { hexPath(cx, cy); ctx.fillStyle = 'rgba(34,68,153,0.35)'; ctx.fill(); }
+
+      const showBarrier = h.barrier && mode === 'gm';
+      hexPath(cx, cy);
+      ctx.strokeStyle = showBarrier ? '#cc7700' : 'rgba(0,0,0,0.4)';
+      ctx.lineWidth   = showBarrier ? 2.5 : 0.7;
+      ctx.stroke();
+    });
+
+    // River line through the river hexes' centres
+    if (realm.riverPath.length > 1) {
+      ctx.beginPath();
+      realm.riverPath.forEach((h, i) => {
+        const [cx, cy] = hexXY(h.col, h.row);
+        i ? ctx.lineTo(cx, cy) : ctx.moveTo(cx, cy);
+      });
+      ctx.strokeStyle = 'rgba(43,95,191,0.7)';
+      ctx.lineWidth = 5;
+      ctx.lineCap = ctx.lineJoin = 'round';
+      ctx.stroke();
+    }
+
+    // Labels above the river line
+    realm.hexes.forEach(h => {
+      const [cx, cy] = hexXY(h.col, h.row);
+
+      if (h.content && mode !== 'terrain') {
+        const { type, data } = h.content;
+        let txt = '', fs = 13;
+        if (type === 'holding') { txt = data.seat ? '★' + data.label : data.label; fs = 11; }
+        else if (mode === 'gm' && type === 'myth')     { txt = String(data.number); fs = 13; }
+        else if (mode === 'gm' && type === 'landmark') { txt = data.icon; fs = 14; }
+        if (txt) {
+          ctx.textAlign = 'center';
+          ctx.font = `bold ${fs}px serif`;
+          ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillText(txt, cx, cy + 5.5);
+          ctx.fillStyle = '#ffffff';         ctx.fillText(txt, cx, cy + 5);
+        }
+      }
+
+      if (mode === 'gm' && h.terrain) {
+        ctx.textAlign = 'center';
+        ctx.font = '6.5px sans-serif';
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillText(`${h.col},${h.row}`, cx, cy - H / 2 + 9);
+      }
+    });
+    return canvas;
+  }
+
+  let dataURL;
+  try {
+    dataURL = draw(true).toDataURL('image/png');
+  } catch (e) {
+    // Canvas tainted by local file:// tile images — fall back to colour-only map
+    dataURL = draw(false).toDataURL('image/png');
+    alert('Browser security blocked the tile images in the export, so the map was exported in colour mode.\nTip: serve the folder over a local web server for full-tile exports.');
+  }
+
+  const a = document.createElement('a');
+  a.href = dataURL;
+  a.download = `${realm.name.replace(/\s+/g, '-').toLowerCase()}-map-${mode}.png`;
+  a.click();
 }
 
 function onHex(col, row) {
@@ -463,8 +722,8 @@ function onHex(col, row) {
 function renderDetail(h) {
   const label = h.terrain ? `${h.character} ${h.terrain}` : 'Ocean';
   let html = `<div class="terrain-tag">[${h.col},${h.row}] ${label}`;
-  if (h.barrier) html += ' <span style="color:#cc7700">· Barrier</span>';
-  if (h.river)   html += ' <span style="color:#5577cc">· River</span>';
+  if (h.barrier) html += ' <a href="#" onclick="showBarrierRules();return false" style="color:#cc7700;text-decoration:none;border-bottom:1px dotted #cc7700" title="Barriers block travel — read the rules (p.14)">· Barrier</a>';
+  if (h.river)   html += ' <a href="#" onclick="showRiverRules();return false" style="color:#5577cc;text-decoration:none;border-bottom:1px dotted #5577cc" title="Rivers & travel — read the rules (p.14)">· River</a>';
   html += '</div>';
   if (!h.content) {
     html += `<p style="font-size:0.78rem;opacity:0.55">Wilderness hex. No landmark here.</p>`;
@@ -473,18 +732,19 @@ function renderDetail(h) {
     if (type==='holding') {
       html += `<h3>${data.seat?'★ Seat of Power':'Holding'}: ${data.name} (${data.label})</h3>`;
       html += `<div class="detail-row">`;
-      html += `<strong>Ruler:</strong> ${data.rulerName?data.rulerName+', ':''}${data.ruler}<br>`;
+      html += `<strong>Ruler:</strong> ${data.rulerName?data.rulerName+', ':''}${data.ruler}${pg(pageRef(data.ruler))}<br>`;
       html += `<strong>Exterior:</strong> ${data.exterior}<br><strong>Bailey:</strong> ${data.bailey}<br><strong>Keep:</strong> ${data.keep}<br>`;
       html += `<strong>Appearance:</strong> ${data.appearance}<br><strong>Desires:</strong> ${data.desire}<br><strong>Personality:</strong> ${data.personality}<br>`;
       html += `<strong>Woe:</strong> ${data.woe}<br><strong>Drama:</strong> ${data.drama}<br><strong>Quest:</strong> ${data.quest}`;
       if(data.rels.length) html+='<br>'+data.rels.map(r=>`<strong>Re ${r.to}:</strong> ${r.rel} with ${r.name}`).join('<br>');
       html += '</div>';
     } else if (type==='myth') {
-      html += `<h3>Myth ${data.number}: ${data.name}</h3>`;
+      html += `<h3>Myth ${data.number}: ${data.name}${pg(pageRef(data.name))}</h3>`;
       html += `<div class="detail-row">A Myth hex. Six Omens reveal themselves as Knights explore. The hex's terrain is shaped by the Myth.</div>`;
     } else {
       const labels={dwellings:'Dwelling',sanctums:'Sanctum',monuments:'Monument',hazards:'Hazard',curses:'Curse',ruins:'Ruin'};
-      html += `<h3>${data.icon} ${labels[subtype]}</h3><div class="detail-row">${data.description}</div>`;
+      const p = subtype==='ruins' ? (ruinPage(data.description) ?? LANDMARK_PAGE[subtype]) : LANDMARK_PAGE[subtype];
+      html += `<h3>${data.icon} ${labels[subtype]}${pg(p)}</h3><div class="detail-row">${data.description}</div>`;
     }
   }
   document.getElementById('hex-detail').innerHTML = html;
@@ -495,15 +755,18 @@ function renderSummary() {
   html += `<div class="sec-title">Holdings</div>`;
   realm.holdings.forEach(h=>{
     html+=`<div class="holding-card"><strong>${h.label}. ${h.name}${h.seat?' ★':''}</strong>
-      <span class="lbl">Ruler</span> ${h.rulerName?h.rulerName+', ':''}${h.ruler}<br>
+      <span class="lbl">Ruler</span> ${h.rulerName?h.rulerName+', ':''}${h.ruler}${pg(pageRef(h.ruler))}<br>
       <span class="lbl">Woe</span> ${h.woe}<br>
       <span class="lbl">Quest</span> ${h.quest}</div>`;
   });
   html += `<div class="sec-title">Active Myths</div>`;
-  realm.myths.forEach(m=>{html+=`<div class="myth-row">${m.number}. <strong style="color:#c8a030">${m.name}</strong> — [${m.hex.col},${m.hex.row}]</div>`;});
+  realm.myths.forEach(m=>{html+=`<div class="myth-row">${m.number}. <strong style="color:#c8a030">${m.name}</strong> — [${m.hex.col},${m.hex.row}]${pg(pageRef(m.name))}</div>`;});
   html += `<div class="sec-title">Landmarks</div><div class="lm-grid">`;
   [['dwellings','♥ Dwelling'],['sanctums','☽ Sanctum'],['monuments','◆ Monument'],['hazards','! Hazard'],['curses','☠ Curse'],['ruins','† Ruin']].forEach(([key,label])=>{
-    (realm.landmarks[key]||[]).forEach(lm=>{html+=`<div class="lm-card"><div class="lm-type">${label}</div>[${lm.hex.col},${lm.hex.row}] ${lm.description}</div>`;});
+    (realm.landmarks[key]||[]).forEach(lm=>{
+      const p = key==='ruins' ? (ruinPage(lm.description) ?? LANDMARK_PAGE[key]) : LANDMARK_PAGE[key];
+      html+=`<div class="lm-card"><div class="lm-type">${label}${pg(p)}</div>[${lm.hex.col},${lm.hex.row}] ${lm.description}</div>`;
+    });
   });
   html += '</div>';
   document.getElementById('realm-summary').innerHTML = html;
@@ -519,19 +782,27 @@ function exportText() {
   realm.holdings.forEach(h=>{
     L.push(`\n[${h.label}] ${h.name}${h.seat?' (Seat of Power)':''}`);
     L.push(`  Hex: [${h.hex.col},${h.hex.row}]`);
-    L.push(`  Ruler: ${h.rulerName?h.rulerName+', ':''}${h.ruler}`);
+    const rp = pageRef(h.ruler);
+    L.push(`  Ruler: ${h.rulerName?h.rulerName+', ':''}${h.ruler}${rp?` (p.${rp})`:''}`);
     L.push(`  Exterior: ${h.exterior}`,`  Bailey: ${h.bailey}`,`  Keep: ${h.keep}`);
     L.push(`  Appearance: ${h.appearance}`,`  Desires: ${h.desire}`,`  Personality: ${h.personality}`);
     L.push(`  Woe: ${h.woe}`,`  Drama: ${h.drama}`,`  Quest: ${h.quest}`);
     h.rels.forEach(r=>L.push(`  → Re ${r.to} (${r.name}): ${r.rel}`));
   });
   L.push('\nMYTHS\n'+'─'.repeat(40));
-  realm.myths.forEach(m=>L.push(`${m.number}. ${m.name} — [${m.hex.col},${m.hex.row}]`));
+  realm.myths.forEach(m=>L.push(`${m.number}. ${m.name} — [${m.hex.col},${m.hex.row}] (p.${pageRef(m.name)})`));
   L.push('\nLANDMARKS\n'+'─'.repeat(40));
   ['dwellings','sanctums','monuments','hazards','curses','ruins'].forEach(key=>{
-    L.push(`\n${key.toUpperCase()}`);
-    (realm.landmarks[key]||[]).forEach(lm=>L.push(`  [${lm.hex.col},${lm.hex.row}] ${lm.description}`));
+    L.push(`\n${key.toUpperCase()} (p.${LANDMARK_PAGE[key]})`);
+    (realm.landmarks[key]||[]).forEach(lm=>{
+      const p = key==='ruins' ? ruinPage(lm.description) : null;
+      L.push(`  [${lm.hex.col},${lm.hex.row}] ${lm.description}${p?` (Myth p.${p})`:''}`);
+    });
   });
+  L.push('\nPAGE REFERENCE KEY\n'+'─'.repeat(40));
+  L.push('Knight & Myth pages point at their full rulebook entry.');
+  L.push('Landmarks: Realm rules p.14 · Seers & Sanctums p.20');
+  L.push('Ruins echoing a Myth list that Myth\'s own page.');
   L.push('\nTERRAIN GRID\n'+'─'.repeat(40));
   for(let r=0;r<ROWS;r++){
     let row='';
@@ -546,7 +817,7 @@ function exportText() {
 }
 
 // ── INIT ──────────────────────────────────────────────
-if (location.protocol !== 'file:') {
+if (location.protocol !== 'file:' && !['localhost','127.0.0.1'].includes(location.hostname)) {
   document.getElementById('tile-note').textContent = 'COLOUR MODE — MB TILES REQUIRE LOCAL COPY';
 }
 generateRealm();

@@ -1,0 +1,8 @@
+Double-click this file:
+
+D:\Users\Lee\Documents\GitHub\mb-realm-generator\serve.bat
+It starts the local server and automatically opens http://localhost:8321/index.html in your browser — that's your full version: tile art, clickable page references with the in-page rulebook reader, and working GM/player PNG exports.
+
+Keep the black console window it opens minimized while you use the generator (closing it stops the server). When you're done, just close that window.
+
+If you only need a quick look at a map and don't care about exports or the rulebook popups, double-clicking index.html directly also works — but the served version is the complete experience, so serve.bat is the habit worth keeping.
